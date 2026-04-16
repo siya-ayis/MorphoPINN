@@ -1,0 +1,17 @@
+# Core Data Engineering
+pandas==2.2.0
+numpy==1.26.3
+scikit-learn==1.4.0
+scipy==1.12.0
+
+# Visualization (For your EDA notebooks and Lab 7 cluster plotting)
+matplotlib==3.8.2
+seaborn==0.13.1
+
+# Notebook Environment
+jupyterlab==4.0.11
+ipykernel==6.29.0
+
+# Optional but recommended for handling various NCEI formats
+openpyxl==3.1.2  # In case NCEI gives you .xlsx files
+tqdm==4.66.1     # Progress bars for the long 15,000+ row loops

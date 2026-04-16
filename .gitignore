@@ -1,0 +1,32 @@
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Massive Raw Datasets (Do NOT upload to GitHub due to 100MB limits)
+data/raw/
+data/external/
+*.nc
+*.grib
+*.hdf5
+
+# Processed metrics (Keep them if small, but ignore huge arrays)
+# data/processed/
+
+# IDEs and Tools
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+logs/
+*.log

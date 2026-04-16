@@ -1,0 +1,6 @@
+--- GENUINE APRIORI SIGNATURES ---
+[Setting_Ocean sediment  ➔  Method_Day grab] -> Lift: 98.50 | Confidence: 100.0% | Fisher P-Value: 5.0761e-03
+[Method_Day grab  ➔  Setting_Ocean sediment] -> Lift: 98.50 | Confidence: 100.0% | Fisher P-Value: 5.0761e-03
+[Class_High, Setting_Ocean water  ➔  Method_Manta net] -> Lift: 5.18 | Confidence: 100.0% | Fisher P-Value: 1.5934e-07
+[Method_Manta net  ➔  Class_High, Setting_Ocean water] -> Lift: 5.18 | Confidence: 23.7% | Fisher P-Value: 1.5934e-07
+[Setting_Ocean water, Class_Medium  ➔  Method_plankton net] -> Lift: 4.80 | Confidence: 14.6% | Fisher P-Value: 5.9811e-05

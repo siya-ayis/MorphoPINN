@@ -1,0 +1,60 @@
+--- CORE SHAPE ---
+Rows: 22530, Cols: 36
+
+--- COLUMNS & MISSING ---
+OBJECTID | Type: int64 | Missing: 0 (0.0%)
+Latitude (degree) | Type: float64 | Missing: 0 (0.0%)
+Longitude (degree) | Type: float64 | Missing: 0 (0.0%)
+Ocean | Type: object | Missing: 278 (1.2%)
+Region | Type: object | Missing: 12268 (54.5%)
+Subregion | Type: object | Missing: 21007 (93.2%)
+Country | Type: object | Missing: 15924 (70.7%)
+State | Type: object | Missing: 16344 (72.5%)
+Beach Location | Type: object | Missing: 16285 (72.3%)
+Marine Setting | Type: object | Missing: 0 (0.0%)
+Ocean Bottom Depth (m) | Type: float64 | Missing: 22205 (98.6%)
+Water Sample Depth (m) | Type: float64 | Missing: 7009 (31.1%)
+Sediment Sample Depth (m) | Type: float64 | Missing: 22144 (98.3%)
+Sampling Method | Type: object | Missing: 0 (0.0%)
+Mesh Size (mm) | Type: float64 | Missing: 5864 (26.0%)
+Transect Number | Type: float64 | Missing: 22232 (98.7%)
+Sampling Point on Beach | Type: float64 | Missing: 21970 (97.5%)
+Volunteers Number | Type: float64 | Missing: 16713 (74.2%)
+Collecting Time (min) | Type: float64 | Missing: 16713 (74.2%)
+Standardized Nurdle  Amount | Type: float64 | Missing: 16713 (74.2%)
+Microplastics Measurement | Type: float64 | Missing: 5817 (25.8%)
+Unit | Type: object | Missing: 0 (0.0%)
+Concentration Class Range | Type: object | Missing: 0 (0.0%)
+Concentration Class | Type: object | Missing: 0 (0.0%)
+Short Reference | Type: object | Missing: 0 (0.0%)
+Long Reference | Type: object | Missing: 0 (0.0%)
+DOI | Type: object | Missing: 0 (0.0%)
+Organization | Type: object | Missing: 0 (0.0%)
+Keywords | Type: object | Missing: 288 (1.3%)
+NCEI Accession Number | Type: int64 | Missing: 0 (0.0%)
+NCEI Accession Link | Type: object | Missing: 0 (0.0%)
+Symbology | Type: object | Missing: 0 (0.0%)
+GlobalID | Type: object | Missing: 0 (0.0%)
+Sample Date | Type: object | Missing: 0 (0.0%)
+x | Type: float64 | Missing: 0 (0.0%)
+y | Type: float64 | Missing: 0 (0.0%)
+
+--- SAMPLING METHOD UNIQUE VALUES ---
+Sampling Method
+Neuston net               10394
+Hand picking               5835
+Manta net                  2759
+Grab sample                1389
+PVC cylinder                370
+Intake seawater pump        284
+Van Dorn sampler            181
+Metal spoon                 142
+Plankton net                106
+Megacorer                    90
+Metal scoop                  89
+Niskin bottle                81
+plankton net                 73
+shovel                       72
+Stainless steel bucket       69
+
+--- OTHER IMPORTANT CATEGORICALS ---
