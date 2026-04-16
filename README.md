@@ -60,7 +60,15 @@ python -m streamlit run src/dashboard.py
 
 ## 📖 Citation
 If you utilize MorphoPINN or the optimized PyDeck visualization suite in your research, please cite our paper:
-> *(Citation placeholder — IEEE/Nature submission pending 2026)*
+
+```bibtex
+@article{morphopinn2026,
+  title={MorphoPINN: A Physics-Informed Spatio-Temporal Graph Attention Network for Microplastic Drift Prediction in the North Atlantic Basin},
+  author={Siya Srivastava, Nehal Rai, and Harshini Rebala},
+  journal={Under Review},
+  year={2026}
+}
+```
 
 ---
 *Built for state-of-the-art computational fluid dynamics and unstructured global pollution tracking.*
