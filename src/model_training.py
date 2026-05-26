@@ -13,13 +13,13 @@ from sklearn.neighbors import BallTree
 import os
 
 try:
-    from torch_geometric.nn import GATConv, MessagePassing
+    from torch_geometric.nn import GATv2Conv, MessagePassing
 except ImportError:
     print("CRITICAL: torch_geometric is required for this MPINN. Please 'pip install torch_geometric'")
     class MessagePassing(nn.Module):
         def __init__(self, aggr='mean'): super().__init__()
-    class GATConv(nn.Module):
-        def __init__(self, in_channels, out_channels, edge_dim, add_self_loops=False): super().__init__()
+    class GATv2Conv(nn.Module):
+        def __init__(self, in_channels, out_channels, heads=1, concat=True, edge_dim=None, add_self_loops=False): super().__init__()
 
 EARTH_RADIUS_KM = 6371.0
 
@@ -38,13 +38,14 @@ class MorphoSTGNN(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
         
-        # Processor (Deep Multi-Scale GAT Layers)
-        self.gat1 = GATConv(hidden_dim, hidden_dim, edge_dim=edge_in_dim, add_self_loops=False)
-        self.gat2 = GATConv(hidden_dim, hidden_dim, edge_dim=edge_in_dim, add_self_loops=False)
-        self.gat3 = GATConv(hidden_dim, hidden_dim, edge_dim=edge_in_dim, add_self_loops=False)
-        
-        # Feature-Space Transformer Mapping 
-        # (Replaces global node attention with per-node feature transformation, as no true sequence exists)
+        # Processor: 3 GATv2 layers, each with 4 attention heads.
+        # Each head maps hidden_dim -> hidden_dim//4 features; concat=True restores output to hidden_dim.
+        self.gat1 = GATv2Conv(hidden_dim, hidden_dim // 4, heads=4, concat=True, edge_dim=edge_in_dim, add_self_loops=False)
+        self.gat2 = GATv2Conv(hidden_dim, hidden_dim // 4, heads=4, concat=True, edge_dim=edge_in_dim, add_self_loops=False)
+        self.gat3 = GATv2Conv(hidden_dim, hidden_dim // 4, heads=4, concat=True, edge_dim=edge_in_dim, add_self_loops=False)
+
+        # Per-node feature-space Transformer: applies self-attention across the hidden feature dimension
+        # of each node independently (no graph structure involved; no true token sequence).
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4, batch_first=True)
         self.feature_attn = nn.TransformerEncoder(encoder_layer, num_layers=1)
         
@@ -57,7 +58,7 @@ class MorphoSTGNN(nn.Module):
         )
 
     def forward(self, x, coords, edge_index, edge_attr):
-        # We explicitly concat coords to enable Navier-Stokes autograd gradients during backprop
+        # Concatenate coords so autograd can compute ∂V/∂(lat,lon) for the divergence penalty
         x_aug = torch.cat([x, coords], dim=-1)
         h = self.encoder(x_aug)
         
@@ -300,14 +301,13 @@ class MorphoModeler:
             model.train()
             optimizer.zero_grad()
             
-            # Allow Autograd to calculate Physical PDE Divergence on the Coordinates
+            # Enable autograd on coordinates so we can compute ∂R_E/∂lon + ∂R_N/∂lat
             coords_t.requires_grad_(True)
             
             out = model(X_tensor, coords_t, edge_index, edge_attr)
             loss_data = criterion(out[train_mask], y_tensor[train_mask])
             
-            # --- TRUE 2D FLOW DIVERGENCE CONTINUITY PENALTY ---
-            # Penalize the network if local graph coordinate flow divergence is abnormally exploding
+            # 2D flow divergence continuity penalty on the CMEMS residual field R = V_pred - V_CMEMS
             
             res_u = out[train_mask, 0] - cmems_tensor[train_mask, 0]
             res_v = out[train_mask, 1] - cmems_tensor[train_mask, 1]

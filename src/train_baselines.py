@@ -7,8 +7,9 @@ import pandas as pd
 from sklearn.model_selection import GroupKFold
 from torch_geometric.nn import SAGEConv, GATConv
 
-# Re-use the exact same data constraints as the core MPINN to prove integrity.
 from model_training import MorphoModeler
+
+DRIFT_SECONDS = 86400.0  # seconds in 24 hours — identical to model_training.py
 
 class ADE_Numerical_Baseline:
     """Pure Physics Proxy predicting Eulerian field via mean advection + dispersion variance."""
@@ -152,15 +153,15 @@ def run_baselines_pipeline(protocols=[15]):
             print(f"> Training {name} on {km}km...")
             preds, actuals, t_hours = train_and_eval_model(name, model, X_tensor, y_tensor, pipeline.coords, pipeline.clusters, edge_index, edge_attr)
             
-            # Formulate Strict Test Metric Logs identically to MPINN
-            error_e_km = (preds[:, 0] - actuals[:, 0]) * 111.32
-            error_n_km = (preds[:, 1] - actuals[:, 1]) * 111.32
-            abs_err_km = np.sqrt(error_e_km**2 + error_n_km**2)
-            
+            # 24-hour displacement error in km — same formula as model_training.py
+            error_e_m = (preds[:, 0] - actuals[:, 0]) * DRIFT_SECONDS
+            error_n_m = (preds[:, 1] - actuals[:, 1]) * DRIFT_SECONDS
+            abs_err_km = np.sqrt(error_e_m**2 + error_n_m**2) / 1000.0
+
             err_df = pd.DataFrame({
-                'Actual_E': actuals[:, 0], 'Actual_N': actuals[:, 1],
-                'Pred_E': preds[:, 0], 'Pred_N': preds[:, 1],
-                'Error_KM': abs_err_km
+                'Actual_E_ms': actuals[:, 0], 'Actual_N_ms': actuals[:, 1],
+                'Pred_E_ms': preds[:, 0], 'Pred_N_ms': preds[:, 1],
+                'Error_KM_24h': abs_err_km
             })
             
             # Export dynamically to be read by calculate_metrics.py

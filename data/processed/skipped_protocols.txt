@@ -1,0 +1,1 @@
+Protocol 15km skipped: Insufficient valid Eulerian/Lagrangian nodes (4 total) to form a dense statistical graph.
