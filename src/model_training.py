@@ -43,8 +43,10 @@ class MorphoSTGNN(nn.Module):
         self.gat2 = GATConv(hidden_dim, hidden_dim, edge_dim=edge_in_dim, add_self_loops=False)
         self.gat3 = GATConv(hidden_dim, hidden_dim, edge_dim=edge_in_dim, add_self_loops=False)
         
-        # Transformer Temporal Mapping (Replacing single-state GRU)
-        self.temporal_attn = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=4, batch_first=True)
+        # Feature-Space Transformer Mapping 
+        # (Replaces global node attention with per-node feature transformation, as no true sequence exists)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4, batch_first=True)
+        self.feature_attn = nn.TransformerEncoder(encoder_layer, num_layers=1)
         
         # Decoder
         self.decoder = nn.Sequential(
@@ -64,9 +66,8 @@ class MorphoSTGNN(nn.Module):
         h_gat2 = F.relu(self.gat2(h_gat1, edge_index, edge_attr))
         h_gat3 = F.relu(self.gat3(h_gat2, edge_index, edge_attr))
         
-        # Sequence-level temporal mapping across entire topological space
-        h_attn, _ = self.temporal_attn(h_gat3.unsqueeze(0), h_gat3.unsqueeze(0), h_gat3.unsqueeze(0))
-        h_attn = h_attn.squeeze(0)
+        # Per-node feature attention mapping (Processing chrono-kinematic and spatial embeddings)
+        h_attn = self.feature_attn(h_gat3.unsqueeze(1)).squeeze(1)
         
         # Adaptive Scaling Protocol (balances graph width with sequence attention)
         alpha = min(1.0, max(0.0, self.protocol_km / 200.0))
@@ -101,85 +102,132 @@ class MorphoModeler:
         df['Month'] = df['Date'].dt.month.astype(float)
         
         self.feature_cols = cat_cols + ['Month', 'Day_Sin', 'Day_Cos', 'Lunar_Phase']
-        raw_X = df[self.feature_cols].values.astype(float)
+        
+        if 'CMEMS_U' in df.columns and 'CMEMS_V' in df.columns:
+            df['CMEMS_U'] = df['CMEMS_U'].fillna(df['CMEMS_U'].mean())
+            df['CMEMS_V'] = df['CMEMS_V'].fillna(df['CMEMS_V'].mean())
+            self.feature_cols.extend(['CMEMS_U', 'CMEMS_V'])
+            
+        self.X = df[self.feature_cols].values.astype(float)
         self.coords = df[['Latitude', 'Longitude']].values.astype(float)
         self.clusters = df['Node_Cluster_ID'].values if 'Node_Cluster_ID' in df.columns else np.arange(len(df))
         
-        scaler_X = StandardScaler()
-        self.X = scaler_X.fit_transform(raw_X)
+        self.y_reg = df[['Velocity_E', 'Velocity_N']].values.astype(float)
         
-        # Scaling Y mathematically separately to allow inverse transformation during evaluation later!
-        raw_y = df[['Velocity_E', 'Velocity_N']].values.astype(float)
-        self.scaler_y = StandardScaler()
-        self.y_reg = self.scaler_y.fit_transform(raw_y)
-        
-        os.makedirs('data/processed/encoders', exist_ok=True)
-        joblib.dump(scaler_X, f'data/processed/encoders/feature_scaler_{self.protocol_km}km.pkl')
-        joblib.dump(self.scaler_y, f'data/processed/encoders/target_scaler_{self.protocol_km}km.pkl')
         print(f"[Status] Un-collapsed Data Loaded: {len(self.X)} geographic vertices mapped.") 
 
     def split_and_augment(self):
         """ Creates an isolated validation set, only running SMOTE on the Train split to stop target leakage. """
         n_samples = len(self.X)
-        test_idx = np.random.choice(n_samples, size=max(1, int(0.2*n_samples)), replace=False)
-        train_mask = np.ones(n_samples, dtype=bool)
-        train_mask[test_idx] = False
+        n_groups = len(np.unique(self.clusters))
         
+        train_mask = np.zeros(n_samples, dtype=bool)
+        if n_groups >= 2:
+            # Use GroupKFold to ensure clusters are not split between train and test
+            n_splits = min(5, n_groups)
+            gkf = GroupKFold(n_splits=n_splits)
+            train_idx, test_idx = next(gkf.split(self.X, self.y_reg, groups=self.clusters))
+            train_mask[train_idx] = True
+        else:
+            # Fallback if too few clusters exist
+            test_idx = np.random.choice(n_samples, size=max(1, int(0.2*n_samples)), replace=False)
+            train_mask = np.ones(n_samples, dtype=bool)
+            train_mask[test_idx] = False
+
+        test_mask = ~train_mask
+
         X_train, y_train, coords_train = self.X[train_mask], self.y_reg[train_mask], self.coords[train_mask]
         X_test, y_test, coords_test = self.X[~train_mask], self.y_reg[~train_mask], self.coords[~train_mask]
         
         # Execute SMOTE ONLY on Training Data
         aug_X_tr, aug_y_tr, aug_coords_tr = self.apply_physics_smote(X_train, y_train, coords_train, target_n=max(10, len(X_train)//5))
         
-        # Concat the safe augmented nodes with the safe test nodes to create the unified valid Graph Space
-        train_mask_aug = np.ones(len(aug_X_tr), dtype=bool)
-        test_mask_aug = np.zeros(len(X_test), dtype=bool)
-        
-        final_X = np.concatenate([aug_X_tr, X_test], axis=0)
-        final_y = np.concatenate([aug_y_tr, y_test], axis=0)
-        final_coords = np.concatenate([aug_coords_tr, coords_test], axis=0)
-        final_train_mask = np.concatenate([train_mask_aug, test_mask_aug])
-        final_test_mask = ~final_train_mask
-        
+        n_synth = len(aug_X_tr) - len(X_train)
+        if n_synth > 0:
+            synth_X = aug_X_tr[-n_synth:]
+            synth_y = aug_y_tr[-n_synth:]
+            synth_coords = aug_coords_tr[-n_synth:]
+            
+            final_X = np.vstack([self.X, synth_X])
+            final_y = np.vstack([self.y_reg, synth_y])
+            final_coords = np.vstack([self.coords, synth_coords])
+            
+            final_train_mask = np.concatenate([train_mask, np.ones(n_synth, dtype=bool)])
+            final_test_mask = np.concatenate([test_mask, np.zeros(n_synth, dtype=bool)])
+        else:
+            final_X, final_y, final_coords = self.X, self.y_reg, self.coords
+            final_train_mask, final_test_mask = train_mask, test_mask
+            
         return final_X, final_y, final_coords, final_train_mask, final_test_mask
 
-    def apply_physics_smote(self, X_tr, y_tr, coords_tr, target_n):
-        if len(X_tr) < 2: return X_tr, y_tr, coords_tr
+    def apply_physics_smote(self, X_tr, y_tr, coords_tr, target_n, k=5):
+        if len(X_tr) < k + 1: return X_tr, y_tr, coords_tr
         
         print(f"[Validation Constraint] SMOTE running isolated purely on training fold ({target_n} clones)...")
-        v_sigma = np.std(y_tr, axis=0) * 1.5
+        
+        # Build Haversine BallTree to find true spatial neighbors
+        coords_rad = np.radians(coords_tr)
+        tree = BallTree(coords_rad, metric='haversine')
+        _, ind = tree.query(coords_rad, k=k + 1) # k+1 because the point itself is included
+        
+        # Smaller perturbation since we have true interpolation now
+        v_sigma = np.std(y_tr, axis=0) * 0.1 
         
         synthetic_X, synthetic_y, synthetic_coords = [], [], []
         for _ in range(target_n):
-            idx = np.random.randint(0, len(X_tr))
-            jitter_e = np.clip(np.random.normal(0, v_sigma[0]/2), -v_sigma[0], v_sigma[0])
-            jitter_n = np.clip(np.random.normal(0, v_sigma[1]/2), -v_sigma[1], v_sigma[1])
+            i = np.random.randint(0, len(X_tr))
             
-            synthetic_X.append(X_tr[idx].copy())
-            synthetic_y.append(y_tr[idx].copy() + np.array([jitter_e, jitter_n]))
-            synthetic_coords.append(coords_tr[idx].copy() + np.random.normal(0, 0.005, size=2))
+            # Pick a random neighbor j (skip index 0 which is self)
+            nn_idx = np.random.randint(1, k + 1)
+            j = ind[i, nn_idx]
+            
+            # Interpolation weight
+            alpha = np.random.rand()
+            
+            # True SMOTE interpolation
+            synth_X = X_tr[i] + alpha * (X_tr[j] - X_tr[i])
+            synth_y = y_tr[i] + alpha * (y_tr[j] - y_tr[i])
+            synth_coords = coords_tr[i] + alpha * (coords_tr[j] - coords_tr[i])
+            
+            # Secondary physics-aware jitter (sub-grid diffusion approx)
+            jitter_e = np.random.normal(0, v_sigma[0])
+            jitter_n = np.random.normal(0, v_sigma[1])
+            synth_y += np.array([jitter_e, jitter_n])
+            synth_coords += np.random.normal(0, 0.001, size=2)
+            
+            synthetic_X.append(synth_X)
+            synthetic_y.append(synth_y)
+            synthetic_coords.append(synth_coords)
             
         return np.vstack([X_tr, np.array(synthetic_X)]), np.vstack([y_tr, np.array(synthetic_y)]), np.vstack([coords_tr, np.array(synthetic_coords)])
 
-    def build_haversine_graph(self, coords, y_reg, k=5):
-        """ Rigorous Haversine Graph Builder """
-        k_actual = min(k, len(coords) - 1)
+    def build_haversine_graph(self, coords, y_reg, k=5, n_real=None):
+        """ Rigorous Haversine Graph Builder (Leakage-Free Topology) """
+        n_real = n_real if n_real is not None else len(coords)
+        k_actual = min(k, n_real - 1)
         if k_actual <= 0:
             return torch.empty((2, 0), dtype=torch.long), torch.empty((0, 3), dtype=torch.float32)
 
         coords_rad = np.radians(coords)
-        tree = BallTree(coords_rad, metric='haversine')
+        tree_rad = coords_rad[:n_real]
+        
+        tree = BallTree(tree_rad, metric='haversine')
         dist, ind = tree.query(coords_rad, k=k_actual+1)
         
         sources, targets, edge_attrs = [], [], []
         omega = 7.2921e-5 
         
         for i in range(len(coords)):
+            is_synthetic = i >= n_real
             lat1, lon1 = coords[i]
             ve1, vn1 = y_reg[i]
             v1_norm = math.sqrt(ve1**2 + vn1**2) + 1e-9
             
-            for j_idx in range(1, k_actual+1):
+            # Real nodes skip self (idx 1). Synthetic nodes skip nothing (idx 0) but drop last
+            start_idx = 1 if not is_synthetic else 0
+            end_idx = k_actual + 1 if not is_synthetic else k_actual
+            
+            for j_idx in range(start_idx, end_idx):
                 j = ind[i, j_idx]
                 lat2, lon2 = coords[j]
                 
@@ -207,7 +255,36 @@ class MorphoModeler:
         if len(self.X) < 2: return
         
         final_X, final_y, final_coords, train_mask, test_mask = self.split_and_augment()
-        edge_index, edge_attr = self.build_haversine_graph(final_coords, final_y, k=10)
+        
+        if len(final_X) < 50:
+            print(f"[Warning] Insufficient graph nodes ({len(final_X)} < 50) at {self.protocol_km}km. Skipping to prevent invalid topological metrics.")
+            os.makedirs('data/processed', exist_ok=True)
+            with open('data/processed/skipped_protocols.txt', 'a') as f:
+                f.write(f"Protocol {self.protocol_km}km skipped: Insufficient valid Eulerian/Lagrangian nodes ({len(final_X)} total) to form a dense statistical graph.\n")
+            return
+        
+        # Fit scalers strictly on training fold to prevent target data leakage
+        scaler_X = StandardScaler()
+        self.scaler_y = StandardScaler()
+        
+        scaler_X.fit(final_X[train_mask])
+        self.scaler_y.fit(final_y[train_mask])
+        
+        has_cmems = 'CMEMS_U' in self.feature_cols
+        if has_cmems:
+            cmems_unscaled = final_X[:, -2:]
+            cmems_tensor = torch.FloatTensor(self.scaler_y.transform(cmems_unscaled))
+        else:
+            cmems_tensor = torch.zeros_like(torch.FloatTensor(final_y))
+            
+        final_X = scaler_X.transform(final_X)
+        final_y = self.scaler_y.transform(final_y)
+        
+        os.makedirs('data/processed/encoders', exist_ok=True)
+        joblib.dump(scaler_X, f'data/processed/encoders/feature_scaler_{self.protocol_km}km.pkl')
+        joblib.dump(self.scaler_y, f'data/processed/encoders/target_scaler_{self.protocol_km}km.pkl')
+        
+        edge_index, edge_attr = self.build_haversine_graph(final_coords, final_y, k=10, n_real=len(self.X))
         
         X_tensor = torch.FloatTensor(final_X)
         y_tensor = torch.FloatTensor(final_y)
@@ -229,21 +306,25 @@ class MorphoModeler:
             out = model(X_tensor, coords_t, edge_index, edge_attr)
             loss_data = criterion(out[train_mask], y_tensor[train_mask])
             
-            # --- TRUE PHYSICS-INFORMED PENALTY (Navier-Stokes Mass Conservation approx) ---
+            # --- TRUE 2D FLOW DIVERGENCE CONTINUITY PENALTY ---
             # Penalize the network if local graph coordinate flow divergence is abnormally exploding
-            grad_outputs_u = torch.ones_like(out[train_mask, 0])
-            grad_u = torch.autograd.grad(out[train_mask, 0], coords_t, grad_outputs=grad_outputs_u, create_graph=True, retain_graph=True)[0]
             
-            grad_outputs_v = torch.ones_like(out[train_mask, 1])
-            grad_v = torch.autograd.grad(out[train_mask, 1], coords_t, grad_outputs=grad_outputs_v, create_graph=True, retain_graph=True)[0]
+            res_u = out[train_mask, 0] - cmems_tensor[train_mask, 0]
+            res_v = out[train_mask, 1] - cmems_tensor[train_mask, 1]
+            
+            grad_outputs_u = torch.ones_like(res_u)
+            grad_u = torch.autograd.grad(res_u, coords_t, grad_outputs=grad_outputs_u, create_graph=True, retain_graph=True)[0]
+            
+            grad_outputs_v = torch.ones_like(res_v)
+            grad_v = torch.autograd.grad(res_v, coords_t, grad_outputs=grad_outputs_v, create_graph=True, retain_graph=True)[0]
             
             dU_dLon = grad_u[train_mask, 1]
             dV_dLat = grad_v[train_mask, 0]
             
             divergence = dU_dLon + dV_dLat
-            loss_physics = 0.05 * torch.mean(divergence**2)
+            loss_divergence = 0.05 * torch.mean(divergence**2)
             
-            loss_train = loss_data + loss_physics
+            loss_train = loss_data + loss_divergence
             loss_train.backward()
             optimizer.step()
             scheduler.step()
@@ -258,7 +339,7 @@ class MorphoModeler:
                 
             history.append({'Epoch': epoch, 'Train_Loss': loss_train.item(), 'Val_Loss': loss_val.item()})
             if epoch % 30 == 0:
-                print(f"Epoch {epoch}: Train Data Loss {loss_data.item():.4f} | Physics Penalty: {loss_physics.item():.5f} | Val Loss: {loss_val.item():.4f}")
+                print(f"Epoch {epoch}: Train Data Loss {loss_data.item():.4f} | Divergence Penalty: {loss_divergence.item():.5f} | Val Loss: {loss_val.item():.4f}")
 
         pd.DataFrame(history).to_csv(f'data/processed/training_history_{self.protocol_km}km.csv', index=False)
         torch.save(model.state_dict(), f'data/processed/st_gcn_model_{self.protocol_km}km.pth')

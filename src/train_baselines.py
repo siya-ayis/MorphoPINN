@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import GroupKFold
 from torch_geometric.nn import SAGEConv, GATConv
 
 # Re-use the exact same data constraints as the core MPINN to prove integrity.
@@ -68,13 +69,22 @@ class ST_GCN_Baseline(nn.Module):
         h = torch.relu(self.gat(x, edge_index, edge_attr))
         return self.fc(h)
 
-def train_and_eval_model(model_name, model, X, y, coords, edge_index=None, edge_attr=None, epochs=150):
+def train_and_eval_model(model_name, model, X, y, coords, clusters, edge_index=None, edge_attr=None, epochs=150):
     start_time = time.time()
     
-    # 80% train mask and independent 20% test mask to avoid target leakage
-    train_idx = np.random.choice(len(X), size=int(0.8*len(X)), replace=False)
-    train_mask = np.zeros(len(X), dtype=bool)
-    train_mask[train_idx] = True
+    n_samples = len(X)
+    n_groups = len(np.unique(clusters))
+    train_mask = np.zeros(n_samples, dtype=bool)
+    if n_groups >= 2:
+        n_splits = min(5, n_groups)
+        gkf = GroupKFold(n_splits=n_splits)
+        train_idx, test_idx = next(gkf.split(X, y, groups=clusters))
+        train_mask[train_idx] = True
+    else:
+        test_idx = np.random.choice(n_samples, size=max(1, int(0.2*n_samples)), replace=False)
+        train_mask = np.ones(n_samples, dtype=bool)
+        train_mask[test_idx] = False
+        
     test_mask = ~train_mask
     
     if model_name == "ADE":
@@ -128,7 +138,7 @@ def run_baselines_pipeline(protocols=[15]):
         y_tensor = torch.FloatTensor(pipeline.y_reg)
         
         # Build strict topological edges (for graph models) identically
-        edge_index, edge_attr = pipeline.build_knn_graph(pipeline.coords, k=5)
+        edge_index, edge_attr = pipeline.build_haversine_graph(pipeline.coords, pipeline.y_reg, k=5)
         
         baselines = {
             "ADE": None,
@@ -140,7 +150,7 @@ def run_baselines_pipeline(protocols=[15]):
         
         for name, model in baselines.items():
             print(f"> Training {name} on {km}km...")
-            preds, actuals, t_hours = train_and_eval_model(name, model, X_tensor, y_tensor, pipeline.coords, edge_index, edge_attr)
+            preds, actuals, t_hours = train_and_eval_model(name, model, X_tensor, y_tensor, pipeline.coords, pipeline.clusters, edge_index, edge_attr)
             
             # Formulate Strict Test Metric Logs identically to MPINN
             error_e_km = (preds[:, 0] - actuals[:, 0]) * 111.32

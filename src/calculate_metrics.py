@@ -67,6 +67,8 @@ def calculate_exact_metrics(y_true, y_pred, spatial_km_errors, hit_threshold_km=
     
     # 2. R^2 Validation & Adjusted R^2
     r2 = r2_score(y_true, y_pred)
+    if r2 < 0:
+        print(f"[WARNING] Negative R² ({r2:.4f}): Model performance is below the mean baseline at this spatial resolution — predictions are worse than predicting the mean velocity.")
     n = len(y_true)
     p = 2 # Velocity_E and Velocity_N predictors
     adj_r2 = 1 - (1 - r2) * (n - 1) / (n - p - 1) if n > p + 1 else r2

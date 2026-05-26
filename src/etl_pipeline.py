@@ -5,6 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
 from sklearn.cluster import KMeans
 import os
+import xarray as xr
 
 EARTH_RADIUS_KM = 6371.0 
 
@@ -14,6 +15,8 @@ class MorphoGraphPipeline:
         self.drifter_path = drifter_path
         self.plastics = None
         self.drifters = None
+        self.cmems = None
+        self.cmems_ds = None
         self.master_table = None
 
     def load_and_clean_data(self):
@@ -76,6 +79,38 @@ class MorphoGraphPipeline:
             print(f"[Critical Error] Drifter Load Failed: {e}")
             self.drifters = None
 
+        self.load_cmems_velocity()
+
+    def load_cmems_velocity(self):
+        print("[Status] Pillar 1.5: Attempting to load CMEMS Eulerian Reanalysis...")
+        file_path = 'data/raw/cmems_velocity.nc'
+        if not os.path.exists(file_path):
+            print(f"[Warning] CMEMS file '{file_path}' not found. Skipping Eulerian integration.")
+            return
+
+        try:
+            # Open lazily — no data loaded into RAM until .sel()/.load() is called
+            ds = xr.open_dataset(file_path)
+            print("[CMEMS Dataset Summary]")
+            print(ds)
+
+            u_col = 'uo' if 'uo' in ds else 'u' if 'u' in ds else None
+            v_col = 'vo' if 'vo' in ds else 'v' if 'v' in ds else None
+
+            if u_col and v_col:
+                rename_map = {}
+                if u_col != 'uo': rename_map[u_col] = 'uo'
+                if v_col != 'vo': rename_map[v_col] = 'vo'
+                if rename_map:
+                    ds = ds.rename(rename_map)
+                self.cmems_ds = ds
+                print(f"[Success] CMEMS dataset opened lazily: {dict(ds.dims)}")
+            else:
+                print("[Warning] Could not identify U/V velocity variables in CMEMS file.")
+
+        except Exception as e:
+            print(f"[Warning] Failed to load CMEMS file: {e}")
+
     def preprocess_drifters(self):
         if self.drifters is None: return
         print("[Status] Pillar 0: Anomaly Purge...")
@@ -83,7 +118,7 @@ class MorphoGraphPipeline:
         self.drifters['velocity_norm'] = np.sqrt(self.drifters['ve']**2 + self.drifters['vn']**2)
         outliers = self.drifters[self.drifters['velocity_norm'] > 3.0]
         self.drifters = self.drifters[self.drifters['velocity_norm'] <= 3.0].copy()
-        print(f"[Pillar 0 Enforcement] Dropped {len(outliers)} impossible Eulerian vectors (>3.0m/s).")
+        print(f"[Pillar 0 Enforcement] Dropped {len(outliers)} impossible Lagrangian drift vectors (>3.0m/s).")
 
         iso = IsolationForest(contamination=0.01, random_state=42) 
         self.drifters['anomaly'] = iso.fit_predict(self.drifters[['ve', 'vn']])
@@ -154,6 +189,41 @@ class MorphoGraphPipeline:
                     df[col] = dummies[col].astype(float)
         
         self.master_table = df
+
+    def join_cmems_to_master(self):
+        if self.master_table is None or self.master_table.empty: return
+        if self.cmems_ds is None:
+            print("[Warning] No CMEMS data loaded. Filling Eulerian fields with NaN.")
+            self.master_table['CMEMS_U'] = np.nan
+            self.master_table['CMEMS_V'] = np.nan
+            return
+
+        print("[Status] Joining CMEMS Eulerian Velocity fields to Master Table (vectorized xarray)...")
+
+        obs_times = pd.to_datetime(self.master_table['Date'].values)
+        obs_lats = self.master_table['Latitude'].values
+        obs_lons = self.master_table['Longitude'].values
+
+        # Vectorized pointwise nearest-neighbor selection — loads only the
+        # ~22k requested grid cells instead of the full 20 GB dataset
+        times_da = xr.DataArray(obs_times, dims='obs')
+        lats_da = xr.DataArray(obs_lats, dims='obs')
+        lons_da = xr.DataArray(obs_lons, dims='obs')
+
+        try:
+            pts = self.cmems_ds.sel(
+                time=times_da, latitude=lats_da, longitude=lons_da,
+                method='nearest'
+            )
+            pts = pts.squeeze(drop=True).load()
+            self.master_table['CMEMS_U'] = pts['uo'].values.flatten()
+            self.master_table['CMEMS_V'] = pts['vo'].values.flatten()
+            matched = self.master_table['CMEMS_U'].notna().sum()
+            print(f"[Pillar 1.5 Enforcement] CMEMS matched {matched} out of {len(self.master_table)} instances.")
+        except Exception as e:
+            print(f"[Warning] CMEMS join failed: {e}. Filling with NaN.")
+            self.master_table['CMEMS_U'] = np.nan
+            self.master_table['CMEMS_V'] = np.nan
 
     def run_clustering_lab7(self, k=1000):
         # [Constraint 1: Probability Density Weighting (Literature Integration)]
@@ -240,6 +310,7 @@ if __name__ == "__main__":
     for protocol_km in [15, 50, 100, 150, 200]: 
         print(f"\n[Executing {protocol_km}km Protocol]")
         pipeline.spatiotemporal_join(target_radius_km=protocol_km)
+        pipeline.join_cmems_to_master()
         pipeline.run_clustering_lab7(k=1000)
         pipeline.prepare_apriori_lab6(protocol_km=protocol_km)
         pipeline.export_master_data(suffix=f"_{protocol_km}km")

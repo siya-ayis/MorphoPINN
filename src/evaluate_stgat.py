@@ -20,6 +20,8 @@ def calculate_physics_metrics(protocol):
     
     # 1. R^2 Validation (Now evaluating on actual True Velocity instead of Z-Scores)
     r2 = r2_score(actual_flat, pred_flat)
+    if r2 < 0:
+        print(f"[WARNING] Negative R² ({r2:.4f}) at {protocol}km: Model performance is below the mean baseline at this spatial resolution — predictions are worse than predicting the mean velocity.")
     
     # 2. RMSE (Root Mean Squared Error of physical velocity m/s)
     rmse = np.sqrt(mean_squared_error(actual_flat, pred_flat))
